@@ -1,0 +1,37 @@
+{
+  "version": "v1",
+  "weights": {
+    "stateFit": 0.3,
+    "editorialPriority": 0.15,
+    "personalTaste": 0.15,
+    "novelty": 0.15,
+    "diversityCorrection": 0.15,
+    "contextConfidence": 0.1
+  },
+  "worldBaseExposure": {
+    "Hidden Design": 0.15,
+    "Look Closer": 0.14,
+    "Human Traces": 0.14,
+    "Nature Around You": 0.11,
+    "Imagine & Create": 0.05,
+    "Space & Boundaries": 0.1,
+    "Listen & Sense": 0.11,
+    "Pause": 0.06,
+    "Move a Little": 0.08,
+    "Patterns & Exceptions": 0.06
+  },
+  "guardrails": {
+    "serendipityRate": 0.2,
+    "sameSeedCooldownDays": 60,
+    "canonicalLensCooldownServes": 3,
+    "maxSameWorldConsecutive": 2,
+    "minDistinctWorldsPer7Serves": 4,
+    "maxFindHeavyConsecutive": 2,
+    "targetNonVisualRate": 0.2,
+    "pauseBaseRateRange": [
+      0.05,
+      0.08
+    ],
+    "maxDefaultRerollsBeforeStatePrompt": 2
+  }
+}
