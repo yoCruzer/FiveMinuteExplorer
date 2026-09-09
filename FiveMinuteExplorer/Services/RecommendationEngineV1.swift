@@ -4,6 +4,9 @@ struct RecommendationContext: Sendable {
   var selectedState: ExplorerState?
   var allowedMovement: Set<String> = ["Stay Here", "Few Steps"]
   var activeContexts: Set<String> = ["Anywhere"]
+  var contextProfile: ContextProfile?
+  var lastServedAt: [Int: Date] = [:]
+  var latestSeedIDs: Set<Int> = []
   var recentSeedIDs: Set<Int> = []
   var recentWorlds: [String] = []
   var recentCanonicalLenses: [String] = []
@@ -19,6 +22,7 @@ struct RecommendationResult: Sendable {
   let totalScore: Double
   let scoreSummary: String
   let usedSerendipity: Bool
+  let fallbackLevel: Int
 }
 
 protocol QuestRecommending {
@@ -35,12 +39,31 @@ struct RecommendationEngineV1: QuestRecommending {
     from quests: [QuestDefinition],
     context: RecommendationContext
   ) -> RecommendationResult? {
-    var candidates = quests.filter { passesHardFilters($0, context: context) }
+    let eligible = quests.filter { passesHardFilters($0, context: context) }
     let lensCooldown = Set(
       context.recentCanonicalLenses.suffix(configuration.guardrails.canonicalLensCooldownServes)
     )
-    candidates.removeAll {
-      context.recentSeedIDs.contains($0.id) || lensCooldown.contains($0.canonicalLens)
+    var candidates = eligible.filter {
+      !context.recentSeedIDs.contains($0.id) && !lensCooldown.contains($0.canonicalLens)
+    }
+    var fallbackLevel = 0
+    if candidates.isEmpty {
+      fallbackLevel = 1
+      candidates = eligible.filter { !context.recentSeedIDs.contains($0.id) }
+    }
+    if candidates.isEmpty {
+      fallbackLevel = 2
+      candidates = eligible.filter { !context.latestSeedIDs.contains($0.id) }
+    }
+    if candidates.isEmpty {
+      fallbackLevel = 3
+      // Last resort still uses only hard-eligible content, least recently served first.
+      candidates = Array(
+        eligible.sorted {
+          let lhs = context.lastServedAt[$0.id] ?? .distantPast
+          let rhs = context.lastServedAt[$1.id] ?? .distantPast
+          return lhs == rhs ? $0.id < $1.id : lhs < rhs
+        }.prefix(1))
     }
 
     if let repeatedWorld = repeatedRecentWorld(in: context) {
@@ -79,11 +102,12 @@ struct RecommendationEngineV1: QuestRecommending {
       quest: chosen.quest,
       totalScore: chosen.total,
       scoreSummary: chosen.summary,
-      usedSerendipity: usedSerendipity
+      usedSerendipity: usedSerendipity,
+      fallbackLevel: fallbackLevel
     )
   }
 
-  private func passesHardFilters(
+  func passesHardFilters(
     _ quest: QuestDefinition,
     context: RecommendationContext
   ) -> Bool {
@@ -112,6 +136,7 @@ struct RecommendationEngineV1: QuestRecommending {
     guard quest.defaultSurface == "Contextual default" else { return true }
     let specific = Set(quest.context).subtracting(["Anywhere"])
     return specific.isEmpty || !specific.isDisjoint(with: context.activeContexts)
+      || context.contextProfile?.matches(quest) == true
   }
 
   private func passesSafetyFilter(
@@ -122,10 +147,25 @@ struct RecommendationEngineV1: QuestRecommending {
     if safety.contains("DaylightOnly") && !context.activeContexts.contains("Daylight") {
       return false
     }
-    if safety.contains("NightSafeOnly") && !context.activeContexts.contains("Night") {
+    if safety.contains("NightSafeOnly")
+      && context.activeContexts.isDisjoint(with: ["Safe Lit Space", "Daylight or Safe Lit Space"])
+    {
       return false
     }
     if safety.contains("CompanionOnly") && !context.activeContexts.contains("With Companion") {
+      return false
+    }
+    if safety.contains("PublicSpaceOnly") && context.contextProfile?.confirmsPublicSpace != true
+      && context.activeContexts.isDisjoint(with: [
+        "Public Space", "Public Safe Space", "Safe Public Space", "Station", "Airport", "Cafe",
+        "Restaurant",
+      ])
+    {
+      return false
+    }
+    if quest.context.contains("Safe Walking Area")
+      && !context.activeContexts.contains("Safe Walking Area")
+    {
       return false
     }
 
@@ -163,7 +203,7 @@ struct RecommendationEngineV1: QuestRecommending {
     context: RecommendationContext
   ) -> ScoreComponents {
     let weights = configuration.weights
-    let state = stateFit(for: quest, selectedState: context.selectedState)
+    let state = QuestMatchingPolicy.stateFit(quest, state: context.selectedState)
     let editorial = editorialPriority(for: quest)
     let novelty = context.recentWorlds.contains(quest.world) ? 0.35 : 1
     let diversity = quest.isFindHeavy && context.recentFindHeavy.last == true ? 0.25 : 1
@@ -178,30 +218,6 @@ struct RecommendationEngineV1: QuestRecommending {
       context: contextFit * weights.contextConfidence * 100,
       worldExposure: worldExposure
     )
-  }
-
-  private func stateFit(
-    for quest: QuestDefinition,
-    selectedState: ExplorerState?
-  ) -> Double {
-    guard let selectedState else { return 0.5 }
-    switch selectedState {
-    case .easy:
-      return max(
-        quest.moods.contains("Easy") ? 1 : 0,
-        ["Very Low", "Low"].contains(quest.cognitiveLoad) ? 0.75 : 0.2
-      )
-    case .calm:
-      return quest.moods.contains("Calm") || quest.world == "Pause" ? 1 : 0.25
-    case .think:
-      return quest.moods.contains("Think") || quest.depth == "Deep" ? 1 : 0.2
-    case .move:
-      return quest.world == "Move a Little" || quest.movement == "Under 50m" ? 1 : 0.2
-    case .listen:
-      return quest.world == "Listen & Sense" || quest.actions.contains("Listen") ? 1 : 0.15
-    case .doNothing:
-      return quest.world == "Pause" || quest.actions.contains("Pause") ? 1 : 0.1
-    }
   }
 
   private func editorialPriority(for quest: QuestDefinition) -> Double {

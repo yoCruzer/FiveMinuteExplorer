@@ -6,6 +6,10 @@ enum QuestEventType: String, Codable, Sendable {
   case sessionStarted = "session_started"
   case questServed = "quest_served"
   case questSkipped = "quest_skipped"
+  case skipReasonSelected = "skip_reason_selected"
+  case contextChanged = "context_changed"
+  case attentionShiftPromptShown = "attention_shift_prompt_shown"
+  case attentionShiftDismissed = "attention_shift_dismissed"
   case questSelectedFromLibrary = "quest_selected_from_library"
   case stateChanged = "state_changed"
   case appBackgrounded = "app_backgrounded"
@@ -30,6 +34,13 @@ final class QuestEventRecord {
   var selectedState: String?
   var skipReason: String?
   var feedbackValue: String?
+  var sourceDetail: String?
+  var surface: String?
+  var contextProfile: String?
+  var recommendationVersion: String?
+  var recommendationScore: Double?
+  var usedSerendipity: Bool?
+  var fallbackLevel: Int?
 
   init(
     id: UUID = UUID(),
@@ -72,6 +83,13 @@ struct QuestEventExport: Codable {
   let selectedState: String?
   let skipReason: String?
   let feedbackValue: String?
+  let sourceDetail: String?
+  let surface: String?
+  let contextProfile: String?
+  let recommendationVersion: String?
+  let recommendationScore: Double?
+  let usedSerendipity: Bool?
+  let fallbackLevel: Int?
 
   init(_ record: QuestEventRecord) {
     id = record.id
@@ -87,12 +105,22 @@ struct QuestEventExport: Codable {
     selectedState = record.selectedState
     skipReason = record.skipReason
     feedbackValue = record.feedbackValue
+    sourceDetail = record.sourceDetail
+    surface = record.surface
+    contextProfile = record.contextProfile
+    recommendationVersion = record.recommendationVersion
+    recommendationScore = record.recommendationScore
+    usedSerendipity = record.usedSerendipity
+    fallbackLevel = record.fallbackLevel
   }
 }
 
 struct QuestEventExportEnvelope: Codable {
   let schemaVersion: String
+  let appVersion: String
+  let buildNumber: String
   let catalogVersion: String
+  let recommendationVersion: String
   let exportedAt: Date
   let events: [QuestEventExport]
 }

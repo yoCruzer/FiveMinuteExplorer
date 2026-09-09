@@ -3,6 +3,7 @@ import Testing
 
 @testable import FiveMinuteExplorer
 
+@MainActor
 struct SessionPolicyTests {
   @Test
   func shortReopenKeepsCurrentSession() {
@@ -55,9 +56,9 @@ struct SessionPolicyTests {
 
   @Test
   func firstTwoSkipsReplaceAndThirdAsksForReason() {
-    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 1) == .replaceImmediately)
-    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 2) == .replaceImmediately)
-    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 3) == .askForReason)
+    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 1, limit: 2) == .replaceImmediately)
+    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 2, limit: 2) == .replaceImmediately)
+    #expect(SkipPolicy.action(afterConsecutiveSkipCount: 3, limit: 2) == .askForReason)
   }
 
   @Test

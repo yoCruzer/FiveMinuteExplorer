@@ -7,11 +7,12 @@ enum SessionPolicy {
   static func shouldStartNewSession(
     activeQuestID: Int?,
     lastBackgroundedAt: Date?,
+    lastActivityAt: Date? = nil,
     now: Date
   ) -> Bool {
     guard activeQuestID != nil else { return true }
-    guard let lastBackgroundedAt else { return false }
-    return now.timeIntervalSince(lastBackgroundedAt) >= inactivityTimeout
+    guard let reference = lastBackgroundedAt ?? lastActivityAt else { return true }
+    return now.timeIntervalSince(reference) >= inactivityTimeout
   }
 
   static func shouldOfferFeedback(
@@ -34,10 +35,8 @@ enum SkipPolicyAction: Equatable {
 }
 
 enum SkipPolicy {
-  static let immediateReplacementLimit = 2
-
-  static func action(afterConsecutiveSkipCount count: Int) -> SkipPolicyAction {
-    count <= immediateReplacementLimit ? .replaceImmediately : .askForReason
+  static func action(afterConsecutiveSkipCount count: Int, limit: Int) -> SkipPolicyAction {
+    count <= limit ? .replaceImmediately : .askForReason
   }
 }
 
@@ -50,6 +49,23 @@ struct QuestSessionSnapshot: Codable, Equatable {
   var currentServeSkipped = false
   var feedbackPromptDismissedSeedID: Int?
   var activeContexts = ["Anywhere"]
+  var lastActivityAt: Date?
+  var backgroundSurface: AppSurface?
+  var contextProfile: ContextProfile?
+  var pendingReflection: ReflectionCandidate?
+}
+
+enum AppSurface: String, Codable {
+  case intro, home, explore, lab
+  case skipHelp = "skip_help"
+  case feedback
+}
+
+struct ReflectionCandidate: Codable, Equatable {
+  let sessionID: UUID
+  let seedID: Int
+  let selectedState: ExplorerState?
+  let contextProfile: ContextProfile?
 }
 
 struct SessionPersistence {

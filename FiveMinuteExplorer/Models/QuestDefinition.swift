@@ -29,11 +29,36 @@ struct QuestDefinition: Codable, Identifiable, Hashable, Sendable {
     time.replacingOccurrences(of: "min", with: "分钟")
   }
 
+  var requirementLabels: [String] {
+    let labels = [
+      "DaylightOnly": "仅限白天", "NightSafeOnly": "仅限安全明亮的夜间环境",
+      "CompanionOnly": "需要同伴", "PublicSpaceOnly": "仅限公共空间",
+      "OptionalCamera": "可选拍照", "OptionalText": "可选文字记录",
+      "OptionalLookup": "可选查询", "NoPhoneDrawing": "需要纸笔",
+      "NaturalInteractionOnly": "仅限自然互动", "ExitAfterShare": "分享后收起手机",
+    ]
+    var result = safety.compactMap { labels[$0] }
+    if context.contains("Safe Walking Area") { result.append("需要安全步行区域") }
+    if defaultSurface == "Contextual default" || defaultSurface == "Browse first" {
+      let names = [
+        "Home": "家中", "Work": "工作场所", "School": "学校", "Station": "车站",
+        "Airport": "机场", "Cafe": "咖啡馆", "Restaurant": "餐厅", "Waiting": "等待时",
+        "Waiting for Food": "等餐时", "Travel": "旅行中", "Hotel": "酒店", "Night": "夜晚",
+        "Nature Nearby": "附近有自然", "Familiar Place": "熟悉的地方", "Daylight": "白天",
+        "Public Space": "公共空间", "Safe Walking Area": "安全步行区域",
+      ]
+      let contexts = context.filter { $0 != "Anywhere" }.map { names[$0] ?? $0 }
+      if !contexts.isEmpty { result.append("适用情境：" + contexts.joined(separator: " / ")) }
+    }
+    return result
+  }
+
   var localizedMovement: String {
     switch movement {
     case "Stay Here": "原地"
     case "Few Steps": "走几步"
     case "Under 50m": "50 米内"
+    case "Short Walk": "散步一小段"
     default: movement
     }
   }

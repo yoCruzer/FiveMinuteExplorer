@@ -175,6 +175,84 @@ struct RecommendationEngineTests {
     #expect(result?.quest.id == 2)
   }
 
+  @Test func fallbackNeverRelaxesSafety() {
+    let safe = makeQuest(id: 1)
+    let unsafe = makeQuest(id: 2, safety: ["PublicSpaceOnly"])
+    let result = engine.recommend(
+      from: [safe, unsafe],
+      context: RecommendationContext(
+        latestSeedIDs: [1, 2], recentSeedIDs: [1, 2], randomSeed: 9))
+    #expect(result?.quest.id == 1)
+    #expect(result?.fallbackLevel == 3)
+  }
+
+  @Test func fallbackRelaxesLensThenLongSeedCooldown() {
+    let quest = makeQuest(id: 1)
+    let lens = engine.recommend(
+      from: [quest],
+      context: RecommendationContext(
+        recentCanonicalLenses: ["Lens A"], randomSeed: 9))
+    #expect(lens?.fallbackLevel == 1)
+    let seed = engine.recommend(
+      from: [quest],
+      context: RecommendationContext(
+        recentSeedIDs: [1], randomSeed: 9))
+    #expect(seed?.fallbackLevel == 2)
+  }
+
+  @Test func publicSpaceRequiresPositiveEvidence() {
+    let quest = makeQuest(id: 1, safety: ["PublicSpaceOnly"])
+    for profile: ContextProfile? in [nil, .home, .night, .waiting] {
+      #expect(
+        engine.recommend(
+          from: [quest],
+          context: RecommendationContext(
+            contextProfile: profile, randomSeed: 9)) == nil)
+    }
+    #expect(
+      engine.recommend(
+        from: [quest],
+        context: RecommendationContext(
+          contextProfile: .transit, randomSeed: 9)) != nil)
+  }
+
+  @Test func allSafetyFlagsRemainHardEvenWhenSeedsExhausted() {
+    for (flag, confirmation) in [
+      ("DaylightOnly", "Daylight"),
+      ("NightSafeOnly", "Safe Lit Space"), ("CompanionOnly", "With Companion"),
+    ] {
+      let quest = makeQuest(id: 1, safety: [flag])
+      #expect(
+        engine.recommend(
+          from: [quest],
+          context: RecommendationContext(
+            recentSeedIDs: [1], randomSeed: 9)) == nil)
+      #expect(
+        engine.recommend(
+          from: [quest],
+          context: RecommendationContext(
+            activeContexts: [confirmation], recentSeedIDs: [1], randomSeed: 9)) != nil)
+    }
+    let night = makeQuest(id: 1, safety: ["NightSafeOnly"])
+    #expect(
+      engine.recommend(
+        from: [night],
+        context: RecommendationContext(
+          activeContexts: ["Night"], randomSeed: 9)) == nil)
+  }
+
+  @Test func moveIncludesShortWalkButDoesNotConfirmSafeWalkingArea() {
+    let walk = makeQuest(id: 1, movement: "Short Walk")
+    let context = RecommendationContext(
+      selectedState: .move,
+      allowedMovement: ["Stay Here", "Few Steps", "Under 50m", "Short Walk"], randomSeed: 9)
+    #expect(engine.recommend(from: [walk], context: context)?.quest.id == 1)
+    #expect(QuestMatchingPolicy.stateFit(walk, state: .move) == 1)
+    let restricted = makeQuest(
+      id: 2, movement: "Short Walk", context: ["Safe Walking Area"], surface: "Contextual default")
+    #expect(engine.recommend(from: [restricted], context: context) == nil)
+  }
+
   private func makeQuest(
     id: Int,
     world: String = "Look A",
@@ -185,7 +263,8 @@ struct RecommendationEngineTests {
     context: [String] = ["Anywhere"],
     cognitiveLoad: String = "Low",
     rank: String = "Recommended",
-    surface: String = "General default"
+    surface: String = "General default",
+    safety: [String] = ["S0"]
   ) -> QuestDefinition {
     QuestDefinition(
       id: id,
@@ -206,7 +285,7 @@ struct RecommendationEngineTests {
       depth: "Light",
       rank: rank,
       defaultSurface: surface,
-      safety: ["S0"],
+      safety: safety,
       whyKeep: "Test",
       catalogStatus: "Cataloged"
     )

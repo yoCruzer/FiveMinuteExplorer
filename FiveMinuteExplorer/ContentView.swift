@@ -21,10 +21,10 @@ struct ContentView: View {
       @unknown default: break
       }
     }
-    .sheet(isPresented: $store.isExplorePresented) {
+    .sheet(isPresented: $store.isExplorePresented, onDismiss: store.presentFeedbackIfPossible) {
       ExploreView(quests: store.quests, onSelect: store.selectFromLibrary)
     }
-    .sheet(isPresented: $store.isLabPresented) {
+    .sheet(isPresented: $store.isLabPresented, onDismiss: store.presentFeedbackIfPossible) {
       LabView(store: store)
     }
     .sheet(
@@ -39,7 +39,8 @@ struct ContentView: View {
       onDismiss: store.dismissFeedback
     ) {
       FeedbackPromptView(store: store)
-        .presentationDetents([.height(310)])
+        .presentationDetents([.medium, .large])
+        .onAppear { store.feedbackPromptDidAppear() }
     }
   }
 }
@@ -48,31 +49,31 @@ private struct IntroView: View {
   let onStart: () -> Void
 
   var body: some View {
-    VStack(spacing: 28) {
-      Spacer()
-      VStack(alignment: .leading, spacing: 20) {
-        Image(systemName: "eye")
-          .font(.title)
-          .foregroundStyle(.tint)
-          .accessibilityHidden(true)
-        Text("给我 5 分钟，让我重新看见这里")
-          .font(.largeTitle.weight(.semibold))
-        VStack(alignment: .leading, spacing: 12) {
-          Text("打开，拿到一个现实世界的小任务。")
-          Text("读完就可以把手机收起来。")
-          Text("不用打卡，也不需要证明完成。")
+    ScrollView {
+      VStack(spacing: 28) {
+        VStack(alignment: .leading, spacing: 20) {
+          Image(systemName: "eye")
+            .font(.title)
+            .foregroundStyle(.tint)
+            .accessibilityHidden(true)
+          Text("给我 5 分钟，让我重新看见这里")
+            .font(.largeTitle.weight(.semibold))
+          VStack(alignment: .leading, spacing: 12) {
+            Text("打开，拿到一个现实世界的小任务。")
+            Text("读完就可以把手机收起来。")
+            Text("不用打卡，也不需要证明完成。")
+          }
+          .foregroundStyle(.secondary)
         }
-        .foregroundStyle(.secondary)
+        .frame(maxWidth: 520, alignment: .leading)
+        Button("开始探索", action: onStart)
+          .buttonStyle(.borderedProminent)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity)
+          .accessibilityHint("开始并获得第一条 Quest")
       }
-      .frame(maxWidth: 520, alignment: .leading)
-      Spacer()
-      Button("开始探索", action: onStart)
-        .buttonStyle(.borderedProminent)
-        .controlSize(.large)
-        .frame(maxWidth: .infinity)
-        .accessibilityHint("开始并获得第一条 Quest")
+      .padding(28)
     }
-    .padding(28)
   }
 }
 
@@ -80,31 +81,34 @@ private struct FeedbackPromptView: View {
   @ObservedObject var store: ExplorerStore
 
   var body: some View {
-    VStack(alignment: .leading, spacing: 22) {
-      HStack(alignment: .top) {
-        Text("刚才那条有没有让你注意到本来不会注意的东西？")
-          .font(.title3.weight(.semibold))
-        Spacer()
-        Button {
-          store.dismissFeedback()
-        } label: {
-          Image(systemName: "xmark")
+    ScrollView {
+      VStack(alignment: .leading, spacing: 22) {
+        HStack(alignment: .top) {
+          Text("刚才那条有没有让你注意到本来不会注意的东西？")
+            .font(.title3.weight(.semibold))
+          Spacer()
+          Button {
+            store.dismissFeedback()
+          } label: {
+            Image(systemName: "xmark")
+              .frame(width: 44, height: 44)
+          }
+          .accessibilityLabel("暂不回答")
         }
-        .accessibilityLabel("暂不回答")
-      }
-      HStack(spacing: 12) {
-        ForEach([FeedbackValue.yes, .no, .notTried], id: \.rawValue) { value in
-          Button(value.title) { store.submitFeedback(value) }
-            .buttonStyle(.bordered)
-            .controlSize(.large)
-            .frame(maxWidth: .infinity)
+        VStack(spacing: 12) {
+          ForEach([FeedbackValue.yes, .no, .notTried], id: \.rawValue) { value in
+            Button(value.title) { store.submitFeedback(value) }
+              .buttonStyle(.bordered)
+              .controlSize(.large)
+              .frame(maxWidth: .infinity)
+          }
         }
+        Text("这不是完成打卡，只帮助我们理解这条 Quest 有没有带来注意力转移。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
       }
-      Text("这不是完成打卡，只帮助我们理解这条 Quest 有没有带来注意力转移。")
-        .font(.footnote)
-        .foregroundStyle(.secondary)
+      .padding(24)
     }
-    .padding(24)
   }
 }
 

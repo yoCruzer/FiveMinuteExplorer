@@ -6,6 +6,15 @@ struct HomeView: View {
   var body: some View {
     VStack(spacing: 0) {
       stateSelector
+      if let profile = store.contextProfile {
+        Button {
+          store.selectContext(nil)
+        } label: {
+          Label("\(profile.title) · 清除", systemImage: "xmark.circle")
+            .font(.footnote)
+            .frame(minHeight: 44)
+        }
+      }
       Group {
         if let quest = store.currentQuest {
           ScrollView {
@@ -20,8 +29,10 @@ struct HomeView: View {
         } else if let catalogError = store.catalogError {
           CatalogUnavailableView(message: catalogError)
         } else {
-          ProgressView("正在找一条合适的 Quest…")
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+          ContentUnavailableView(
+            store.recommendationUnavailable ? "暂时没有合适的 Quest" : "可以先停一下",
+            systemImage: "pause.circle",
+            description: Text("可以换个状态，或从探索目录里选一条。详细信息在 Lab 中。"))
         }
       }
       .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -34,9 +45,10 @@ struct HomeView: View {
           .disabled(store.currentQuest == nil)
           .accessibilityHint("换一条 Quest；连续跳过后会询问原因")
         Button("探索更多") { store.isExplorePresented = true }
-          .buttonStyle(.borderedProminent)
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
           .controlSize(.large)
-          .frame(maxWidth: .infinity)
+          .frame(maxWidth: .infinity, minHeight: 44)
           .disabled(store.quests.isEmpty)
       }
       .padding(.horizontal, 20)
@@ -105,8 +117,8 @@ private struct QuestCard: View {
           .fixedSize(horizontal: false, vertical: true)
         Spacer(minLength: 8)
         Menu {
-          Button("多来点这种", systemImage: "hand.thumbsup", action: onMore)
-          Button("少来点这种", systemImage: "hand.thumbsdown", action: onLess)
+          Button("这类不错", systemImage: "hand.thumbsup", action: onMore)
+          Button("这类不适合我", systemImage: "hand.thumbsdown", action: onLess)
         } label: {
           Image(systemName: "ellipsis")
             .frame(width: 44, height: 44)
@@ -118,7 +130,7 @@ private struct QuestCard: View {
         .font(.title3)
         .lineSpacing(5)
         .fixedSize(horizontal: false, vertical: true)
-      HStack(spacing: 14) {
+      VStack(alignment: .leading, spacing: 8) {
         Label(quest.localizedTime, systemImage: "clock")
         Label(quest.localizedMovement, systemImage: "figure.stand")
       }
@@ -127,6 +139,16 @@ private struct QuestCard: View {
       Text("读完就可以把手机收起来。")
         .font(.footnote)
         .foregroundStyle(.tertiary)
+      if !quest.requirementLabels.isEmpty {
+        Text(quest.requirementLabels.joined(separator: " · "))
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+      if quest.movement != "Stay Here" {
+        Text("只在安全步行区域进行，走动时请收起手机。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
     }
     .frame(maxWidth: 560, alignment: .leading)
     .padding(24)

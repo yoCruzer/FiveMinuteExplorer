@@ -4,13 +4,20 @@ enum EventExporter {
   static func write(
     records: [QuestEventRecord],
     catalogVersion: String,
-    now: Date = Date()
+    recommendationVersion: String,
+    now: Date = Date(),
+    directory: URL? = nil
   ) throws -> URL {
     let envelope = QuestEventExportEnvelope(
-      schemaVersion: "v0.1",
+      schemaVersion: "v0.2",
+      appVersion: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        ?? "unknown",
+      buildNumber: Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        ?? "unknown",
       catalogVersion: catalogVersion,
+      recommendationVersion: recommendationVersion,
       exportedAt: now,
-      events: records.map(QuestEventExport.init)
+      events: records.map { QuestEventExport($0) }
     )
     let encoder = JSONEncoder()
     encoder.dateEncodingStrategy = .iso8601
@@ -21,7 +28,7 @@ enum EventExporter {
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.dateFormat = "yyyyMMdd-HHmmss"
     let fileName = "FiveMinuteExplorer-events-\(formatter.string(from: now)).json"
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent(fileName)
+    let url = (directory ?? FileManager.default.temporaryDirectory).appendingPathComponent(fileName)
     try data.write(to: url, options: .atomic)
     return url
   }

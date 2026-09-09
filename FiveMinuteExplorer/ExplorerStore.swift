@@ -10,6 +10,8 @@ final class ExplorerStore: ObservableObject {
   @Published private(set) var catalogError: String?
   @Published private(set) var selectedState: ExplorerState?
   @Published private(set) var activeContexts: [String] = ["Anywhere"]
+  @Published private(set) var contextProfile: ContextProfile?
+  @Published private(set) var recommendationUnavailable = false
   @Published private(set) var recentEvents: [QuestEventRecord] = []
   @Published private(set) var lastRecommendationSource = "—"
   @Published private(set) var lastRecommendationScore = "—"
@@ -31,12 +33,27 @@ final class ExplorerStore: ObservableObject {
   private var pendingSkipQuest: QuestDefinition?
   private var started = false
   private var openExploreAfterSkipDismissal = false
+  private let clock: () -> Date
+  private let randomSeed: () -> UInt64
+
+  var surface: AppSurface {
+    if !hasSeenIntro { return .intro }
+    if isFeedbackPresented { return .feedback }
+    if isSkipHelpPresented { return .skipHelp }
+    if isLabPresented { return .lab }
+    if isExplorePresented { return .explore }
+    return .home
+  }
 
   init(
     modelContext: ModelContext,
     persistence providedPersistence: SessionPersistence? = nil,
-    storageDiagnostic: String? = nil
+    storageDiagnostic: String? = nil,
+    clock: @escaping () -> Date = Date.init,
+    randomSeed: @escaping () -> UInt64 = { UInt64.random(in: UInt64.min...UInt64.max) }
   ) {
+    self.clock = clock
+    self.randomSeed = randomSeed
     self.modelContext = modelContext
     let persistence = providedPersistence ?? SessionPersistence()
     self.persistence = persistence
@@ -58,6 +75,7 @@ final class ExplorerStore: ObservableObject {
       currentQuest = snapshot.activeQuestID.flatMap(catalog.quest(id:))
       selectedState = snapshot.selectedState
       activeContexts = snapshot.activeContexts
+      contextProfile = snapshot.contextProfile
     } catch {
       catalogError = error.localizedDescription
       diagnostics.append("目录载入失败：\(error.localizedDescription)")
@@ -69,16 +87,9 @@ final class ExplorerStore: ObservableObject {
   func startIfNeeded(now: Date = Date()) {
     guard !started else { return }
     started = true
-    appendEvent(.appOpened, quest: currentQuest)
+    appendEvent(.appOpened, quest: currentQuest, timestamp: now)
     guard hasSeenIntro, catalog != nil else { return }
-
-    if SessionPolicy.shouldStartNewSession(
-      activeQuestID: currentQuest?.id,
-      lastBackgroundedAt: snapshot.lastBackgroundedAt,
-      now: now
-    ) {
-      startNewSession(now: now)
-    }
+    resume(now: now)
   }
 
   func completeIntro(now: Date = Date()) {
@@ -97,47 +108,83 @@ final class ExplorerStore: ObservableObject {
     currentQuest = nil
     selectedState = nil
     activeContexts = snapshot.activeContexts
+    contextProfile = nil
     isLabPresented = false
   }
 
   func appDidEnterBackground(now: Date = Date()) {
     guard started else { return }
     snapshot.lastBackgroundedAt = now
+    snapshot.lastActivityAt = now
+    snapshot.backgroundSurface = surface
     persistSnapshot()
     appendEvent(.appBackgrounded, quest: currentQuest, timestamp: now)
   }
 
   func appDidBecomeActive(now: Date = Date()) {
     guard started, hasSeenIntro else { return }
+    resume(now: now)
+  }
+
+  private func resume(now: Date) {
     let backgroundedAt = snapshot.lastBackgroundedAt
-
-    if SessionPolicy.shouldStartNewSession(
-      activeQuestID: currentQuest?.id,
-      lastBackgroundedAt: backgroundedAt,
-      now: now
-    ) {
-      startNewSession(now: now)
-      return
-    }
-
     let alreadyHandled =
       snapshot.feedbackPromptDismissedSeedID == currentQuest?.id
       || hasFeedbackForCurrentQuest()
-    if SessionPolicy.shouldOfferFeedback(
-      backgroundedAt: backgroundedAt,
-      now: now,
-      hasActiveQuest: currentQuest != nil,
-      wasSkipped: snapshot.currentServeSkipped,
-      alreadyHandled: alreadyHandled
-    ) {
-      isFeedbackPresented = true
+    if snapshot.pendingReflection == nil, snapshot.backgroundSurface == .home,
+      let sessionID = snapshot.sessionID, let quest = currentQuest,
+      SessionPolicy.shouldOfferFeedback(
+        backgroundedAt: backgroundedAt,
+        now: now,
+        hasActiveQuest: currentQuest != nil,
+        wasSkipped: snapshot.currentServeSkipped,
+        alreadyHandled: alreadyHandled
+      )
+    {
+      snapshot.pendingReflection = ReflectionCandidate(
+        sessionID: sessionID, seedID: quest.id,
+        selectedState: selectedState, contextProfile: contextProfile)
     }
-
+    // A deliberately skipped/empty focus is still part of the current session.
+    let sessionQuestID = currentQuest?.id ?? (snapshot.currentServeSkipped ? -1 : nil)
+    if SessionPolicy.shouldStartNewSession(
+      activeQuestID: sessionQuestID,
+      lastBackgroundedAt: backgroundedAt, lastActivityAt: snapshot.lastActivityAt, now: now)
+    {
+      startNewSession(now: now)
+    }
     snapshot.lastBackgroundedAt = nil
+    snapshot.backgroundSurface = nil
+    snapshot.lastActivityAt = now
     persistSnapshot()
+    if currentQuest == nil && snapshot.currentServeSkipped && !isSkipHelpPresented
+      && !isExplorePresented
+    {
+      updateState(.doNothing)
+      serveRecommended(source: "skip_pause")
+    }
+    presentFeedbackIfPossible()
+  }
+
+  func presentFeedbackIfPossible() {
+    guard snapshot.pendingReflection != nil, surface == .home else { return }
+    isFeedbackPresented = true
+  }
+
+  func feedbackPromptDidAppear() {
+    guard let candidate = snapshot.pendingReflection,
+      !hasEvent(.attentionShiftPromptShown, candidate: candidate)
+    else { return }
+    appendReflectionEvent(.attentionShiftPromptShown, candidate: candidate)
   }
 
   func selectState(_ state: ExplorerState?) {
+    guard selectedState != state else { return }
+    updateState(state)
+    serveRecommended(source: "state_change")
+  }
+
+  private func updateState(_ state: ExplorerState?) {
     guard selectedState != state else { return }
     snapshot.selectedState = state
     snapshot.consecutiveSkips = 0
@@ -149,48 +196,76 @@ final class ExplorerStore: ObservableObject {
       source: state == nil ? "cleared" : "selected",
       selectedState: state
     )
-    serveRecommended(source: "state_change")
+  }
+
+  func selectContext(_ profile: ContextProfile?) {
+    guard contextProfile != profile else { return }
+    snapshot.contextProfile = profile
+    contextProfile = profile
+    activeContexts = profile?.contexts.sorted() ?? ["Anywhere"]
+    snapshot.activeContexts = activeContexts
+    persistSnapshot()
+    appendEvent(
+      .contextChanged, quest: currentQuest, source: profile == nil ? "cleared" : "selected")
   }
 
   func skipCurrent() {
     guard let quest = currentQuest else { return }
     let nextCount = snapshot.consecutiveSkips + 1
-    switch SkipPolicy.action(afterConsecutiveSkipCount: nextCount) {
+    snapshot.consecutiveSkips = nextCount
+    snapshot.currentServeSkipped = true
+    snapshot.activeQuestID = nil
+    currentQuest = nil
+    pendingSkipQuest = quest
+    persistSnapshot()
+    appendEvent(.questSkipped, quest: quest, source: "one_tap", selectedState: selectedState)
+    switch SkipPolicy.action(
+      afterConsecutiveSkipCount: nextCount,
+      limit: recommendationConfiguration?.guardrails.maxDefaultRerollsBeforeStatePrompt ?? 0)
+    {
     case .replaceImmediately:
-      snapshot.consecutiveSkips = nextCount
-      snapshot.currentServeSkipped = true
-      persistSnapshot()
-      appendEvent(.questSkipped, quest: quest, source: "one_tap")
       serveRecommended(source: "skip_replacement")
+      pendingSkipQuest = nil
     case .askForReason:
-      pendingSkipQuest = quest
       isSkipHelpPresented = true
     }
   }
 
   func resolvePendingSkip(reason: SkipReason) {
-    guard commitPendingSkip(reason: reason) else { return }
+    guard let rejected = pendingSkipQuest else { return }
+    appendEvent(
+      .skipReasonSelected, quest: rejected, source: "reason_prompt",
+      selectedState: selectedState, skipReason: reason)
+    pendingSkipQuest = nil
     isSkipHelpPresented = false
-    guard reason != .notNow else { return }
+    if reason == .notNow { updateState(.doNothing) }
+    if reason == .contextMismatch { selectContext(nil) }
     snapshot.consecutiveSkips = 0
     persistSnapshot()
-    serveRecommended(source: "skip_replacement", adjustment: reason)
+    serveRecommended(source: "skip_replacement", adjustment: reason, rejectedWorld: rejected.world)
   }
 
   func chooseStateFromSkip(_ state: ExplorerState) {
-    _ = commitPendingSkip(reason: nil)
+    guard pendingSkipQuest != nil else { return }
+    pendingSkipQuest = nil
     isSkipHelpPresented = false
-    selectState(state)
+    updateState(state)
+    snapshot.consecutiveSkips = 0
+    serveRecommended(source: "state_change")
   }
 
   func openExploreFromSkip() {
-    _ = commitPendingSkip(reason: nil)
+    pendingSkipQuest = nil
     openExploreAfterSkipDismissal = true
     isSkipHelpPresented = false
   }
 
   func skipHelpDidDismiss() {
-    _ = commitPendingSkip(reason: nil)
+    if pendingSkipQuest != nil {
+      pendingSkipQuest = nil
+      updateState(.doNothing)
+      serveRecommended(source: "skip_pause")
+    }
     if openExploreAfterSkipDismissal {
       openExploreAfterSkipDismissal = false
       isExplorePresented = true
@@ -199,16 +274,26 @@ final class ExplorerStore: ObservableObject {
 
   func selectFromLibrary(
     _ quest: QuestDefinition,
-    source: String
+    source: String,
+    sourceDetail: String
   ) {
+    if source == "explore_state",
+      let state = ExplorerState.allCases.first(where: { $0.sourceDetail == sourceDetail })
+    {
+      updateState(state)
+    }
+    if source == "explore_context", let profile = ContextProfile(rawValue: sourceDetail) {
+      selectContext(profile)
+    }
     appendEvent(
       .questSelectedFromLibrary,
       quest: quest,
       source: source,
+      sourceDetail: sourceDetail,
       selectedState: selectedState
     )
     snapshot.consecutiveSkips = 0
-    serve(quest, source: source, scoreSummary: "用户从有限书架中选择")
+    serve(quest, source: source, scoreSummary: "用户从有限书架中选择", sourceDetail: sourceDetail)
     isExplorePresented = false
   }
 
@@ -223,33 +308,36 @@ final class ExplorerStore: ObservableObject {
   }
 
   func submitFeedback(_ value: FeedbackValue) {
-    guard let currentQuest else { return }
-    appendEvent(
-      .attentionShiftFeedback,
-      quest: currentQuest,
-      source: "return_prompt",
-      selectedState: selectedState,
-      feedbackValue: value
-    )
-    snapshot.feedbackPromptDismissedSeedID = currentQuest.id
-    persistSnapshot()
-    isFeedbackPresented = false
+    guard let candidate = snapshot.pendingReflection else { return }
+    appendReflectionEvent(.attentionShiftFeedback, candidate: candidate, feedbackValue: value)
+    finishFeedback(candidate)
   }
 
   func dismissFeedback() {
-    snapshot.feedbackPromptDismissedSeedID = currentQuest?.id
+    guard let candidate = snapshot.pendingReflection else { return }
+    appendReflectionEvent(.attentionShiftDismissed, candidate: candidate)
+    finishFeedback(candidate)
+  }
+
+  private func finishFeedback(_ candidate: ReflectionCandidate) {
+    if snapshot.sessionID == candidate.sessionID {
+      snapshot.feedbackPromptDismissedSeedID = candidate.seedID
+    }
+    snapshot.pendingReflection = nil
     persistSnapshot()
     isFeedbackPresented = false
   }
 
-  func exportEvents(now: Date = Date()) {
-    appendEvent(.eventLogExported, quest: currentQuest, source: "lab", timestamp: now)
+  func exportEvents(now: Date = Date(), directory: URL? = nil) {
     do {
       exportURL = try EventExporter.write(
         records: fetchEvents(ascending: true),
         catalogVersion: catalogVersion,
-        now: now
+        recommendationVersion: recommendationConfiguration?.version ?? "unknown",
+        now: now,
+        directory: directory
       )
+      appendEvent(.eventLogExported, quest: currentQuest, source: "lab", timestamp: now)
       exportError = nil
     } catch {
       exportURL = nil
@@ -259,9 +347,12 @@ final class ExplorerStore: ObservableObject {
   }
 
   private func startNewSession(now: Date) {
-    snapshot = QuestSessionSnapshot(sessionID: UUID())
+    let reflection = snapshot.pendingReflection
+    snapshot = QuestSessionSnapshot(
+      sessionID: UUID(), lastActivityAt: now, pendingReflection: reflection)
     selectedState = nil
     activeContexts = snapshot.activeContexts
+    contextProfile = nil
     currentQuest = nil
     persistSnapshot()
     appendEvent(.sessionStarted, source: "session_default", timestamp: now)
@@ -270,16 +361,22 @@ final class ExplorerStore: ObservableObject {
 
   private func serveRecommended(
     source: String,
-    adjustment: SkipReason? = nil
+    adjustment: SkipReason? = nil,
+    rejectedWorld: String? = nil
   ) {
     guard let recommendationEngine, let recommendationConfiguration else { return }
     var context = makeRecommendationContext(
       cooldownDays: recommendationConfiguration.guardrails.sameSeedCooldownDays
     )
     apply(adjustment: adjustment, to: &context)
+    if adjustment == .tasteMismatch, let rejectedWorld { context.avoidedWorlds = [rejectedWorld] }
 
     guard let result = recommendationEngine.recommend(from: quests, context: context) else {
       diagnostics.append("推荐失败：没有符合当前过滤条件的 Quest")
+      currentQuest = nil
+      snapshot.activeQuestID = nil
+      recommendationUnavailable = true
+      persistSnapshot()
       return
     }
     let serendipity = result.usedSerendipity ? " · controlled serendipity" : ""
@@ -287,16 +384,22 @@ final class ExplorerStore: ObservableObject {
       result.quest,
       source: source,
       scoreSummary: String(
-        format: "%.1f · %@%@", result.totalScore, result.scoreSummary, serendipity)
+        format: "%.1f · %@%@ · fallback %d", result.totalScore, result.scoreSummary, serendipity,
+        result.fallbackLevel),
+      result: result
     )
   }
 
   private func serve(
     _ quest: QuestDefinition,
     source: String,
-    scoreSummary: String
+    scoreSummary: String,
+    sourceDetail: String? = nil,
+    result: RecommendationResult? = nil
   ) {
     currentQuest = quest
+    recommendationUnavailable = false
+    snapshot.lastActivityAt = clock()
     snapshot.activeQuestID = quest.id
     snapshot.currentServeSkipped = false
     snapshot.feedbackPromptDismissedSeedID = nil
@@ -307,24 +410,31 @@ final class ExplorerStore: ObservableObject {
       .questServed,
       quest: quest,
       source: source,
-      selectedState: selectedState
+      sourceDetail: sourceDetail,
+      selectedState: selectedState,
+      result: result
     )
   }
 
   private func makeRecommendationContext(cooldownDays: Int) -> RecommendationContext {
-    let cutoff = Date().addingTimeInterval(-Double(cooldownDays) * 86_400)
+    let cutoff = clock().addingTimeInterval(-Double(cooldownDays) * 86_400)
     let served = fetchEvents(ascending: false)
       .filter { $0.type == QuestEventType.questServed.rawValue }
     let recentForDiversity = Array(served.prefix(7).reversed())
     let allowedMovement: Set<String> =
       selectedState == .move
-      ? ["Stay Here", "Few Steps", "Under 50m"]
+      ? ["Stay Here", "Few Steps", "Under 50m", "Short Walk"]
       : ["Stay Here", "Few Steps"]
 
     return RecommendationContext(
       selectedState: selectedState,
       allowedMovement: allowedMovement,
       activeContexts: Set(activeContexts),
+      contextProfile: contextProfile,
+      lastServedAt: Dictionary(
+        served.compactMap { event in event.seedID.map { ($0, event.timestamp) } },
+        uniquingKeysWith: max),
+      latestSeedIDs: Set(served.prefix(2).compactMap(\.seedID)),
       recentSeedIDs: Set(served.filter { $0.timestamp >= cutoff }.compactMap(\.seedID)),
       recentWorlds: recentForDiversity.compactMap(\.world),
       recentCanonicalLenses: recentForDiversity.compactMap(\.canonicalLens),
@@ -332,7 +442,7 @@ final class ExplorerStore: ObservableObject {
         guard let seedID = event.seedID else { return false }
         return catalog?.quest(id: seedID)?.isFindHeavy ?? false
       },
-      randomSeed: UInt64.random(in: UInt64.min...UInt64.max)
+      randomSeed: randomSeed()
     )
   }
 
@@ -355,43 +465,57 @@ final class ExplorerStore: ObservableObject {
     }
   }
 
-  @discardableResult
-  private func commitPendingSkip(reason: SkipReason?) -> Bool {
-    guard let quest = pendingSkipQuest else { return false }
-    pendingSkipQuest = nil
-    snapshot.consecutiveSkips += 1
-    snapshot.currentServeSkipped = true
-    persistSnapshot()
-    appendEvent(
-      .questSkipped,
-      quest: quest,
-      source: "reason_prompt",
-      selectedState: selectedState,
-      skipReason: reason
-    )
-    return true
-  }
-
   private func hasFeedbackForCurrentQuest() -> Bool {
     guard let currentQuest, let sessionID = snapshot.sessionID else { return false }
-    return recentEvents.contains {
-      $0.type == QuestEventType.attentionShiftFeedback.rawValue
-        && $0.seedID == currentQuest.id
-        && $0.sessionID == sessionID
+    let candidate = ReflectionCandidate(
+      sessionID: sessionID, seedID: currentQuest.id,
+      selectedState: selectedState, contextProfile: contextProfile)
+    return hasEvent(.attentionShiftFeedback, candidate: candidate)
+      || hasEvent(.attentionShiftDismissed, candidate: candidate)
+  }
+
+  private func hasEvent(_ type: QuestEventType, candidate: ReflectionCandidate) -> Bool {
+    let eventType = type.rawValue
+    let sessionID = candidate.sessionID
+    let seedID = candidate.seedID
+    var descriptor = FetchDescriptor<QuestEventRecord>(
+      predicate: #Predicate {
+        $0.type == eventType && $0.sessionID == sessionID && $0.seedID == seedID
+      })
+    descriptor.fetchLimit = 1
+    do { return try !modelContext.fetch(descriptor).isEmpty } catch {
+      diagnostics.append("反馈查询失败：\(error.localizedDescription)")
+      return false
     }
+  }
+
+  private func appendReflectionEvent(
+    _ type: QuestEventType, candidate: ReflectionCandidate,
+    feedbackValue: FeedbackValue? = nil
+  ) {
+    let record = QuestEventRecord(
+      timestamp: clock(), type: type, sessionID: candidate.sessionID,
+      quest: catalog?.quest(id: candidate.seedID), source: "return_prompt",
+      selectedState: candidate.selectedState, feedbackValue: feedbackValue)
+    record.contextProfile = candidate.contextProfile?.rawValue
+    record.surface = AppSurface.feedback.rawValue
+    record.recommendationVersion = recommendationConfiguration?.version
+    saveEvent(record)
   }
 
   private func appendEvent(
     _ type: QuestEventType,
     quest: QuestDefinition? = nil,
     source: String? = nil,
+    sourceDetail: String? = nil,
     selectedState: ExplorerState? = nil,
     skipReason: SkipReason? = nil,
     feedbackValue: FeedbackValue? = nil,
-    timestamp: Date = Date()
+    timestamp: Date? = nil,
+    result: RecommendationResult? = nil
   ) {
     let record = QuestEventRecord(
-      timestamp: timestamp,
+      timestamp: timestamp ?? clock(),
       type: type,
       sessionID: snapshot.sessionID,
       quest: quest,
@@ -400,6 +524,17 @@ final class ExplorerStore: ObservableObject {
       skipReason: skipReason,
       feedbackValue: feedbackValue
     )
+    record.sourceDetail = sourceDetail
+    record.surface = surface.rawValue
+    record.contextProfile = contextProfile?.rawValue
+    record.recommendationVersion = recommendationConfiguration?.version
+    record.recommendationScore = result?.totalScore
+    record.usedSerendipity = result?.usedSerendipity
+    record.fallbackLevel = result?.fallbackLevel
+    saveEvent(record)
+  }
+
+  private func saveEvent(_ record: QuestEventRecord) {
     modelContext.insert(record)
     do {
       try modelContext.save()
@@ -409,11 +544,12 @@ final class ExplorerStore: ObservableObject {
     refreshRecentEvents()
   }
 
-  private func fetchEvents(ascending: Bool) -> [QuestEventRecord] {
+  private func fetchEvents(ascending: Bool, limit: Int? = nil) -> [QuestEventRecord] {
     let order: SortOrder = ascending ? .forward : .reverse
-    let descriptor = FetchDescriptor<QuestEventRecord>(
+    var descriptor = FetchDescriptor<QuestEventRecord>(
       sortBy: [SortDescriptor(\.timestamp, order: order)]
     )
+    descriptor.fetchLimit = limit
     do {
       return try modelContext.fetch(descriptor)
     } catch {
@@ -423,7 +559,7 @@ final class ExplorerStore: ObservableObject {
   }
 
   private func refreshRecentEvents() {
-    recentEvents = Array(fetchEvents(ascending: false).prefix(40))
+    recentEvents = fetchEvents(ascending: false, limit: 40)
   }
 
   private func persistSnapshot() {
