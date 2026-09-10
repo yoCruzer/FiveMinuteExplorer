@@ -40,4 +40,56 @@ final class FiveMinuteExplorerUITests: XCTestCase {
             XCUIApplication().launch()
         }
     }
+
+    @MainActor
+    func testStabilizationLargeTextFlow() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-has-seen-intro-v0", "NO", "-UIPreferredContentSizeCategoryName",
+                               "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        func capture(_ name: String) {
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = name
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<8 {
+                if element.isHittable { return }
+                app.swipeUp()
+            }
+        }
+        XCTAssertTrue(app.staticTexts["给我 5 分钟，让我重新看见这里"].waitForExistence(timeout: 10))
+        capture("01-intro-large-text")
+        let start = app.buttons["开始探索"]
+        reveal(start)
+        XCTAssertTrue(start.isHittable)
+        capture("02-intro-start-reachable")
+        start.tap()
+        XCTAssertTrue(app.buttons["探索更多"].waitForExistence(timeout: 10))
+        capture("03-home-large-text")
+        app.buttons["探索更多"].tap()
+        let listen = app.collectionViews.buttons["听一听"]
+        reveal(listen)
+        capture("04-library-categories")
+        listen.tap()
+        let quest = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "library-quest-")).firstMatch
+        XCTAssertTrue(quest.waitForExistence(timeout: 5))
+        capture("05-library-detail-large-text")
+        quest.tap()
+        XCTAssertTrue(app.buttons["不适合我"].waitForExistence(timeout: 5))
+        XCUIDevice.shared.press(.home)
+        // Exercise the real >60-second Useful Exit without injecting app-only test state.
+        Thread.sleep(forTimeInterval: 65)
+        app.activate()
+        let dismiss = app.buttons["暂不回答"]
+        XCTAssertTrue(dismiss.waitForExistence(timeout: 10))
+        capture("06-feedback-large-text")
+        let notTried = app.buttons["没做"]
+        reveal(notTried)
+        XCTAssertTrue(notTried.isHittable)
+        capture("07-feedback-answer-reachable")
+        notTried.tap()
+        XCTAssertTrue(app.buttons["探索更多"].waitForExistence(timeout: 5))
+    }
 }

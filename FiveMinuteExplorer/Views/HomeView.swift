@@ -1,0 +1,171 @@
+import SwiftUI
+
+struct HomeView: View {
+  @ObservedObject var store: ExplorerStore
+
+  var body: some View {
+    VStack(spacing: 0) {
+      stateSelector
+      if let profile = store.contextProfile {
+        Button {
+          store.selectContext(nil)
+        } label: {
+          Label("\(profile.title) · 清除", systemImage: "xmark.circle")
+            .font(.footnote)
+            .frame(minHeight: 44)
+        }
+      }
+      Group {
+        if let quest = store.currentQuest {
+          ScrollView {
+            QuestCard(
+              quest: quest,
+              onMore: { store.recordTaste(more: true) },
+              onLess: { store.recordTaste(more: false) }
+            )
+            .padding(.horizontal, 20)
+            .padding(.vertical, 18)
+          }
+        } else if store.catalogError != nil {
+          CatalogUnavailableView()
+        } else {
+          ContentUnavailableView(
+            store.recommendationUnavailable ? "暂时没有合适的 Quest" : "可以先停一下",
+            systemImage: "pause.circle",
+            description: Text("可以换个状态，或从探索目录里选一条。详细信息在 Lab 中。"))
+        }
+      }
+      .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+      VStack(spacing: 10) {
+        Button("不适合我") { store.skipCurrent() }
+          .buttonStyle(.bordered)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity)
+          .disabled(store.currentQuest == nil)
+          .accessibilityHint("换一条 Quest；连续跳过后会询问原因")
+        Button("探索更多") { store.isExplorePresented = true }
+          .buttonStyle(.plain)
+          .foregroundStyle(.secondary)
+          .controlSize(.large)
+          .frame(maxWidth: .infinity, minHeight: 44)
+          .disabled(store.quests.isEmpty)
+      }
+      .padding(.horizontal, 20)
+      .padding(.bottom, 18)
+    }
+    .navigationTitle("5分钟探索")
+    .navigationBarTitleDisplayMode(.inline)
+    .toolbar {
+      ToolbarItem(placement: .topBarTrailing) {
+        Menu {
+          Button("Lab", systemImage: "wrench.and.screwdriver") {
+            store.isLabPresented = true
+          }
+        } label: {
+          Image(systemName: "ellipsis.circle")
+        }
+        .accessibilityLabel("更多选项")
+      }
+    }
+  }
+
+  private var stateSelector: some View {
+    ScrollView(.horizontal, showsIndicators: false) {
+      HStack(spacing: 8) {
+        StateChip(title: "随便一个", isSelected: store.selectedState == nil) {
+          store.selectState(nil)
+        }
+        ForEach(ExplorerState.allCases) { state in
+          StateChip(title: state.title, isSelected: store.selectedState == state) {
+            store.selectState(state)
+          }
+        }
+      }
+      .padding(.horizontal, 20)
+      .padding(.vertical, 10)
+    }
+    .accessibilityLabel("当前状态")
+  }
+}
+
+private struct StateChip: View {
+  let title: String
+  let isSelected: Bool
+  let action: () -> Void
+
+  var body: some View {
+    Button(title, action: action)
+      .font(.subheadline.weight(isSelected ? .semibold : .regular))
+      .buttonStyle(.bordered)
+      .buttonBorderShape(.capsule)
+      .tint(isSelected ? .accentColor : .secondary)
+      .accessibilityAddTraits(isSelected ? .isSelected : [])
+  }
+}
+
+private struct QuestCard: View {
+  let quest: QuestDefinition
+  let onMore: () -> Void
+  let onLess: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 22) {
+      HStack(alignment: .top) {
+        Text(quest.title)
+          .font(.title.weight(.semibold))
+          .fixedSize(horizontal: false, vertical: true)
+        Spacer(minLength: 8)
+        Menu {
+          Button("这类不错", systemImage: "hand.thumbsup", action: onMore)
+          Button("这类不适合我", systemImage: "hand.thumbsdown", action: onLess)
+        } label: {
+          Image(systemName: "ellipsis")
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
+        }
+        .accessibilityLabel("Quest 偏好")
+      }
+      Text(quest.text)
+        .font(.title3)
+        .lineSpacing(5)
+        .fixedSize(horizontal: false, vertical: true)
+      VStack(alignment: .leading, spacing: 8) {
+        Label(quest.localizedTime, systemImage: "clock")
+        Label(quest.localizedMovement, systemImage: "figure.stand")
+      }
+      .font(.footnote)
+      .foregroundStyle(.secondary)
+      Text("读完就可以把手机收起来。")
+        .font(.footnote)
+        .foregroundStyle(.tertiary)
+      if !quest.requirementLabels.isEmpty {
+        Text(quest.requirementLabels.joined(separator: " · "))
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+      if quest.movement != "Stay Here" {
+        Text("只在安全步行区域进行，不要为了 Quest 过马路，走动时请收起手机。")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+    }
+    .frame(maxWidth: 560, alignment: .leading)
+    .padding(24)
+    .background(
+      Color(uiColor: .secondarySystemBackground),
+      in: RoundedRectangle(cornerRadius: 22)
+    )
+  }
+}
+
+private struct CatalogUnavailableView: View {
+  var body: some View {
+    ContentUnavailableView {
+      Label("Quest 目录暂不可用", systemImage: "exclamationmark.triangle")
+    } description: {
+      Text("请稍后重试。详细信息可在 Lab 中查看。")
+    }
+    .padding()
+  }
+}
