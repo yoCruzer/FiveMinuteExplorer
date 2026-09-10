@@ -8,6 +8,30 @@ import Testing
 struct ExplorerStoreTests {
   private let now = Date(timeIntervalSince1970: 2_000_000)
 
+  @Test func realLibraryContextSurvivesSkipWithMatchingReplacement() throws {
+    for profile in [ContextProfile.home, .transit, .waiting, .night] {
+      let (store, context, persistence) = try fixture()
+      let engine = RecommendationEngineV1(configuration: try RecommendationConfiguration.bundled())
+      let recommendationContext = RecommendationContext(
+        activeContexts: profile.confirmedContexts, contextProfile: profile, randomSeed: 9)
+      let selected = try #require(store.quests.first {
+        profile.matches($0) && engine.passesHardFilters($0, context: recommendationContext)
+      })
+      store.selectFromLibrary(selected, source: "explore_context", sourceDetail: profile.rawValue)
+      store.skipCurrent()
+      let replacement = try #require(store.currentQuest)
+      #expect(replacement.id != selected.id)
+      #expect(profile.matches(replacement))
+      #expect(persistence.load()?.contextProfile == profile)
+      #expect(try events(context, .questServed).last?.usedSerendipity != true)
+      if profile == .night {
+        #expect(store.activeContexts.contains("Safe Lit Space"))
+        store.selectContext(nil)
+        #expect(!store.activeContexts.contains("Safe Lit Space"))
+      }
+    }
+  }
+
   private func fixture() throws -> (ExplorerStore, ModelContext, SessionPersistence) {
     let container = try ModelContainer(
       for: QuestEventRecord.self,

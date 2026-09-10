@@ -26,8 +26,8 @@ struct HomeView: View {
             .padding(.horizontal, 20)
             .padding(.vertical, 18)
           }
-        } else if let catalogError = store.catalogError {
-          CatalogUnavailableView(message: catalogError)
+        } else if store.catalogError != nil {
+          CatalogUnavailableView()
         } else {
           ContentUnavailableView(
             store.recommendationUnavailable ? "暂时没有合适的 Quest" : "可以先停一下",
@@ -145,7 +145,7 @@ private struct QuestCard: View {
           .foregroundStyle(.secondary)
       }
       if quest.movement != "Stay Here" {
-        Text("只在安全步行区域进行，走动时请收起手机。")
+        Text("只在安全步行区域进行，不要为了 Quest 过马路，走动时请收起手机。")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }
@@ -160,13 +160,11 @@ private struct QuestCard: View {
 }
 
 private struct CatalogUnavailableView: View {
-  let message: String
-
   var body: some View {
     ContentUnavailableView {
       Label("Quest 目录暂不可用", systemImage: "exclamationmark.triangle")
     } description: {
-      Text("请稍后重试。详细信息可在 Lab 中查看。\n\(message)")
+      Text("请稍后重试。详细信息可在 Lab 中查看。")
     }
     .padding()
   }

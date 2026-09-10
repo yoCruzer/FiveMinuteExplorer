@@ -86,6 +86,13 @@ struct RecommendationEngineV1: QuestRecommending {
       return ScoredCandidate(quest: quest, components: components)
     }
     .sorted {
+      if let profile = context.contextProfile {
+        let lhs = QuestMatchingPolicy.contextCompatibility($0.quest, profile: profile)
+        let rhs = QuestMatchingPolicy.contextCompatibility($1.quest, profile: profile)
+        // Explicit place intent precedes softer editorial/state scoring. Universal
+        // content remains available for cooldown fallback and controlled serendipity.
+        if lhs != rhs { return lhs.rawValue > rhs.rawValue }
+      }
       if $0.total == $1.total { return $0.quest.id < $1.quest.id }
       return $0.total > $1.total
     }
@@ -94,6 +101,7 @@ struct RecommendationEngineV1: QuestRecommending {
 
     var generator = SeededRandomNumberGenerator(seed: context.randomSeed)
     let usedSerendipity = generator.nextUnitInterval() < configuration.guardrails.serendipityRate
+      && Set(ranked.map { $0.quest.id }).count > 1
     let poolCount = min(usedSerendipity ? 12 : 1, ranked.count)
     let chosenIndex = Int(generator.next() % UInt64(poolCount))
     let chosen = ranked[chosenIndex]
@@ -130,6 +138,12 @@ struct RecommendationEngineV1: QuestRecommending {
     _ quest: QuestDefinition,
     context: RecommendationContext
   ) -> Bool {
+    if let profile = context.contextProfile {
+      guard QuestMatchingPolicy.contextCompatibility(quest, profile: profile) != .incompatible else {
+        return false
+      }
+      if !context.avoidContextSpecific { return true }
+    }
     if context.avoidContextSpecific {
       return quest.defaultSurface == "General default" && quest.context.contains("Anywhere")
     }
@@ -207,7 +221,9 @@ struct RecommendationEngineV1: QuestRecommending {
     let editorial = editorialPriority(for: quest)
     let novelty = context.recentWorlds.contains(quest.world) ? 0.35 : 1
     let diversity = quest.isFindHeavy && context.recentFindHeavy.last == true ? 0.25 : 1
-    let contextFit = quest.context.contains("Anywhere") ? 0.8 : 1
+    let contextFit = context.contextProfile.map {
+      QuestMatchingPolicy.contextCompatibility(quest, profile: $0).fit
+    } ?? (quest.context.contains("Anywhere") ? 0.8 : 1)
     let worldExposure = configuration.worldBaseExposure[quest.world, default: 0] * 3
 
     return ScoreComponents(

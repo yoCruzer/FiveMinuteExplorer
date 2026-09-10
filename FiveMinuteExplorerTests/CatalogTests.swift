@@ -5,6 +5,41 @@ import Testing
 
 @MainActor
 struct CatalogTests {
+  @Test func explicitProfilesPreferRealExactContent() throws {
+    let quests = try BundledQuestCatalog().quests
+    let engine = RecommendationEngineV1(configuration: try RecommendationConfiguration.bundled())
+    // Seed 9 takes the normal path; assert that fact alongside the recommendation.
+    for profile in ContextProfile.allCases {
+      for state: ExplorerState? in [nil, .listen, .think] {
+        let context = RecommendationContext(
+          selectedState: state, activeContexts: profile.confirmedContexts,
+          contextProfile: profile, randomSeed: 9)
+        let exact = quests.filter { profile.matches($0) && engine.passesHardFilters($0, context: context) }
+        #expect(!exact.isEmpty, "No hard-eligible exact pool: \(profile)")
+        let result = try #require(engine.recommend(from: quests, context: context))
+        #expect(!result.usedSerendipity)
+        #expect(profile.matches(result.quest), "Generic replacement: \(profile) / \(result.quest.id)")
+      }
+    }
+  }
+
+  @Test func realNightRequiresSessionConfirmation() throws {
+    let quests = try BundledQuestCatalog().quests
+    let engine = RecommendationEngineV1(configuration: try RecommendationConfiguration.bundled())
+    let night = quests.filter { $0.safety.contains("NightSafeOnly") }
+    #expect(!night.isEmpty)
+    for quest in night {
+      #expect(!engine.passesHardFilters(quest, context: RecommendationContext(randomSeed: 9)))
+      #expect(!engine.passesHardFilters(quest, context: RecommendationContext(
+        activeContexts: ["Night"], contextProfile: .night, randomSeed: 9)))
+    }
+    let confirmed = RecommendationContext(
+      activeContexts: ContextProfile.night.confirmedContexts, contextProfile: .night, randomSeed: 9)
+    #expect(night.contains { engine.passesHardFilters($0, context: confirmed) })
+    #expect(ContextProfile.night.title == "安全明亮的夜晚")
+    #expect(!ContextProfile.night.confirmsPublicSpace)
+  }
+
   @Test
   func bundledCatalogLoadsAllUniqueV1Quests() throws {
     let catalog = try BundledQuestCatalog()

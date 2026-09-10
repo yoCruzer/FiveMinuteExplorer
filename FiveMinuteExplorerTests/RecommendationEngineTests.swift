@@ -31,6 +31,43 @@ struct RecommendationEngineTests {
     RecommendationEngineV1(configuration: configuration)
   }
 
+  @Test func explicitContextKeepsUniversalAndRejectsOtherPlaceEvenInFallback() {
+    let home = makeQuest(id: 1, context: ["Home"])
+    let universal = makeQuest(id: 2)
+    let transit = makeQuest(id: 3, context: ["Anywhere", "Station"])
+    let context = RecommendationContext(contextProfile: .home, randomSeed: 9)
+    #expect(engine.passesHardFilters(home, context: context))
+    #expect(engine.passesHardFilters(universal, context: context))
+    #expect(!engine.passesHardFilters(transit, context: context))
+    #expect(engine.recommend(from: [universal, transit], context: context)?.quest.id == 2)
+    let exhausted = RecommendationContext(
+      contextProfile: .home, latestSeedIDs: [2], recentSeedIDs: [2], randomSeed: 9)
+    #expect(engine.recommend(from: [universal, transit], context: exhausted)?.quest.id == 2)
+  }
+
+  @Test func singleChoiceNeverRecordsSerendipity() {
+    for seed in UInt64(1)...100 {
+      let result = engine.recommend(
+        from: [makeQuest(id: 1)], context: RecommendationContext(randomSeed: seed))
+      #expect(result?.usedSerendipity == false)
+    }
+  }
+
+  @Test func sharedContextClassifiesEnvironmentAndConfirmedPublicSpace() {
+    let transit = makeQuest(id: 1, environment: ["Transit"])
+    let home = makeQuest(id: 2, environment: ["Home", "Indoor"])
+    let publicQuest = makeQuest(
+      id: 3, context: ["Public Space"], surface: "Contextual default", safety: ["PublicSpaceOnly"])
+    #expect(QuestMatchingPolicy.contextCompatibility(transit, profile: .transit) == .exact)
+    #expect(QuestMatchingPolicy.contextCompatibility(home, profile: .transit) == .incompatible)
+    #expect(QuestMatchingPolicy.contextCompatibility(publicQuest, profile: .transit) == .confirmedPublicSpace)
+    #expect(QuestMatchingPolicy.contextCompatibility(publicQuest, profile: .home) == .incompatible)
+    #expect(QuestMatchingPolicy.contextCompatibility(publicQuest, profile: .night) == .incompatible)
+    #expect(engine.passesHardFilters(
+      publicQuest, context: RecommendationContext(contextProfile: .transit, randomSeed: 9)))
+  }
+
+
   @Test
   func experimentalIsFilteredFromGeneralDefault() {
     let experimental = makeQuest(id: 1, rank: "Experimental", surface: "Experimental only")
@@ -260,6 +297,7 @@ struct RecommendationEngineTests {
     actions: [String] = ["Notice"],
     moods: [String] = ["Easy"],
     movement: String = "Stay Here",
+    environment: [String] = ["Anywhere"],
     context: [String] = ["Anywhere"],
     cognitiveLoad: String = "Low",
     rank: String = "Recommended",
@@ -280,7 +318,7 @@ struct RecommendationEngineTests {
       energy: "Low",
       cognitiveLoad: cognitiveLoad,
       movement: movement,
-      environment: ["Anywhere"],
+      environment: environment,
       context: context,
       depth: "Light",
       rank: rank,

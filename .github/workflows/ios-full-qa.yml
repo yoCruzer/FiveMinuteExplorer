@@ -1,0 +1,37 @@
+name: iOS Full QA
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  full-qa:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select and assert Xcode
+        shell: bash
+        run: |
+          if [[ -d /Applications/Xcode_26.6.app/Contents/Developer ]]; then
+            export DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer
+            echo "DEVELOPER_DIR=$DEVELOPER_DIR" >> "$GITHUB_ENV"
+          fi
+          xcodebuild -version
+          [[ $(xcodebuild -version | head -n 1) == 'Xcode 26.6' ]]
+      - run: python3 scripts/verify-static.py
+      - run: scripts/ci-ios.sh --full-qa
+      - uses: actions/upload-artifact@v7.0.1
+        if: failure()
+        with:
+          name: full-qa-failure-${{ github.run_id }}
+          path: |
+            .ci-artifacts/**/*.log
+            .ci-artifacts/**/*.xcresult
+            .ci-artifacts/**/devices.json
+          include-hidden-files: true
+          retention-days: 7

@@ -17,7 +17,7 @@ enum ContextProfile: String, Codable, CaseIterable, Identifiable {
     case .cafeRestaurant: "咖啡馆 / 餐厅"
     case .transit: "车站 / 机场"
     case .travel: "旅行中"
-    case .night: "夜晚"
+    case .night: "安全明亮的夜晚"
     case .familiarPlace: "熟悉的地方"
     case .natureNearby: "附近有自然"
     }
@@ -37,6 +37,8 @@ enum ContextProfile: String, Codable, CaseIterable, Identifiable {
   }
   var environments: Set<String> {
     switch self {
+    case .home: ["Home"]
+    case .familiarPlace: ["Familiar Place"]
     case .workSchool: ["WorkSchool"]
     case .transit: ["Transit"]
     case .natureNearby: ["Nature Nearby"]
@@ -44,12 +46,51 @@ enum ContextProfile: String, Codable, CaseIterable, Identifiable {
     }
   }
   var confirmsPublicSpace: Bool { self == .transit || self == .cafeRestaurant }
+  // Confirmation is supplied only when the user selects the profile, not as a taxonomy alias.
+  var confirmedContexts: Set<String> {
+    self == .night ? contexts.union(["Safe Lit Space"]) : contexts
+  }
   func matches(_ quest: QuestDefinition) -> Bool {
     !contexts.isDisjoint(with: quest.context) || !environments.isDisjoint(with: quest.environment)
   }
 }
 
 enum QuestMatchingPolicy {
+  enum ContextCompatibility: Int {
+    case incompatible, universal, confirmedPublicSpace, exact
+
+    var fit: Double {
+      switch self {
+      case .incompatible: 0
+      case .universal: 0.2
+      case .confirmedPublicSpace: 0.8
+      case .exact: 1
+      }
+    }
+  }
+
+  static func contextCompatibility(
+    _ quest: QuestDefinition, profile: ContextProfile
+  ) -> ContextCompatibility {
+    if profile.matches(quest) { return .exact }
+    let contexts = Set(quest.context).subtracting(["Anywhere"])
+    let specificEnvironments: Set<String> = [
+      "Home", "WorkSchool", "Transit", "Familiar Place", "Nature Nearby",
+    ]
+    guard specificEnvironments.isDisjoint(with: quest.environment) else {
+      return .incompatible
+    }
+    let publicContexts: Set<String> = ["Public Space", "Public Safe Space", "Safe Public Space"]
+    if profile.confirmsPublicSpace,
+      (!contexts.isEmpty && contexts.isSubset(of: publicContexts)
+        || contexts.isEmpty && quest.safety.contains("PublicSpaceOnly"))
+    {
+      return .confirmedPublicSpace
+    }
+    return contexts.isEmpty && quest.context.contains("Anywhere")
+      && !quest.safety.contains("PublicSpaceOnly") ? .universal : .incompatible
+  }
+
   static func stateFit(_ quest: QuestDefinition, state: ExplorerState?) -> Double {
     guard let state else { return 0.5 }
     switch state {

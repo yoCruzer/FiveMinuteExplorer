@@ -199,10 +199,11 @@ final class ExplorerStore: ObservableObject {
   }
 
   func selectContext(_ profile: ContextProfile?) {
-    guard contextProfile != profile else { return }
+    guard contextProfile != profile
+      || (profile == .night && !activeContexts.contains("Safe Lit Space")) else { return }
     snapshot.contextProfile = profile
     contextProfile = profile
-    activeContexts = profile?.contexts.sorted() ?? ["Anywhere"]
+    activeContexts = profile?.confirmedContexts.sorted() ?? ["Anywhere"]
     snapshot.activeContexts = activeContexts
     persistSnapshot()
     appendEvent(
